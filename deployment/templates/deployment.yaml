@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: network-monitor-data
+  namespace: networking
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-monitor
+  namespace: networking
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: network-monitor
+
+  template:
+    metadata:
+      labels:
+        app: network-monitor
+
+    spec:
+      # Gives the monitor the node's real network stack.
+      # This is useful when you specifically want to monitor
+      # the actual host/Vodafone egress path.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+
+      containers:
+        - name: network-monitor
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+
+          env:
+            - name: DATABASE_PATH
+              value: /data/network.db
+
+            - name: INTERVAL_SECONDS
+              value: "60"
+
+            - name: PING_COUNT
+              value: "5"
+
+            - name: PING_TARGETS_V4
+              value: "1.1.1.1,8.8.8.8"
+
+            - name: PING_TARGETS_V6
+              value: "2606:4700:4700::1111,2001:4860:4860::8888"
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_RAW
+              drop:
+                - ALL
+
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: network-monitor-data
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-monitor
+  namespace: networking
+spec:
+  selector:
+    app: network-monitor
+
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+  type: ClusterIP
